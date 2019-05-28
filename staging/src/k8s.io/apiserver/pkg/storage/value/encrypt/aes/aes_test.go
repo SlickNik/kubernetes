@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -146,6 +148,53 @@ func TestCBCKeyRotation(t *testing.T) {
 	}
 	if !stale || !bytes.Equal([]byte("firstvalue"), from) {
 		t.Fatalf("unexpected data: %t %q", stale, from)
+	}
+}
+
+func TestCBCWithHMACCiphertextIntegrity(t *testing.T) {
+	testErr := fmt.Errorf("test error")
+	key := []byte("abcdefghijklmnopweneedtoaddakeyoflen32formachere")
+	//t.Log("inputs : key", len(key), key, " made up of :\naes", key[:16], "\nhmac", key[16:], "\n")
+	block1, err := aes.NewCipher(key[:16])
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := hmac.New(sha256.New, key[16:])
+
+	context := value.DefaultContext([]byte("authenticated_data"))
+
+	p := value.NewPrefixTransformers(testErr,
+		value.PrefixTransformer{Prefix: []byte("first:"), Transformer: NewACHTransformer(block1, hash)},
+	)
+	out, err := p.TransformToStorage([]byte("firstvalue"), context)
+	//t.Log("inputs to encrypt: p", p, "\ncontext", context, "\nmessage", []byte("firstvalue"), "\n")
+	//t.Log("output of encrypt: out", len(out) - 6, out[6:], "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(out, []byte("first:")) {
+		t.Fatalf("unexpected prefix: %q", out)
+	}
+	from, stale, err := p.TransformFromStorage(out, context)
+	//t.Log("output of decrypt: from", len(from), from, "\n")
+	if err != nil {
+		t.Fatal(err, len(out))
+	}
+	if stale || !bytes.Equal([]byte("firstvalue"), from) {
+		t.Fatalf("unexpected data: %t %q", stale, from)
+	}
+
+	// verify changing the context fails decrypt
+	from, stale, err = p.TransformFromStorage(out, value.DefaultContext([]byte("incorrect_context")))
+	if err == nil {
+		t.Fatalf("expected unauthenticated data: %v", err)
+	}
+
+	// verify invalid mac fails decrypt
+	ciphertext2 := append(out[:len(out)-32], []byte("aninvalidmachereaninvalidmachere")...)
+	from, stale, err = p.TransformFromStorage(ciphertext2, context)
+	if err == nil {
+		t.Fatalf("expected invalid mac for data: %v", err)
 	}
 }
 

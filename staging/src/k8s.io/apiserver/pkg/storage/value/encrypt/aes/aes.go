@@ -21,9 +21,10 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
-	"errors"
 	"fmt"
+	"hash"
 	"io"
 
 	"k8s.io/apiserver/pkg/storage/value"
@@ -86,6 +87,7 @@ func (t *gcm) TransformToStorage(data []byte, context value.Context) ([]byte, er
 // cbc implements encryption at rest of the provided values given a cipher.Block algorithm.
 type cbc struct {
 	block cipher.Block
+	hash  hash.Hash
 }
 
 // NewCBCTransformer takes the given block cipher and performs encryption and decryption on the given
@@ -94,26 +96,37 @@ func NewCBCTransformer(block cipher.Block) value.Transformer {
 	return &cbc{block: block}
 }
 
+// TODO: find out if there's a way to ensure that hash is a hmac
+func NewACHTransformer(block cipher.Block, hash hash.Hash) value.Transformer {
+	return &cbc{block: block, hash: hash}
+}
+
 var (
-	errInvalidBlockSize    = fmt.Errorf("the stored data is not a multiple of the block size")
-	errInvalidPKCS7Data    = errors.New("invalid PKCS7 data (empty or not padded)")
-	errInvalidPKCS7Padding = errors.New("invalid padding on input")
+	errInvalidBlockSize = fmt.Errorf("the stored data is not a multiple of the block size")
+	errFailedDecryption = fmt.Errorf("failed to decrypt stored data")
 )
 
 func (t *cbc) TransformFromStorage(data []byte, context value.Context) ([]byte, bool, error) {
 	blockSize := aes.BlockSize
-	if len(data) < blockSize {
+	// using mac only when hash is defined in cbc struct
+	hashSize := 0
+	if t.hash != nil {
+		hashSize = t.hash.Size()
+	}
+	macIndex := len(data) - hashSize
+	minDataSize := blockSize + hashSize
+	if len(data) < minDataSize {
 		return nil, false, fmt.Errorf("the stored data was shorter than the required size")
 	}
 	iv := data[:blockSize]
-	data = data[blockSize:]
+	cipherText := data[blockSize:macIndex]
 
-	if len(data)%blockSize != 0 {
+	if len(cipherText)%blockSize != 0 {
 		return nil, false, errInvalidBlockSize
 	}
 
-	result := make([]byte, len(data))
-	copy(result, data)
+	result := make([]byte, len(cipherText))
+	copy(result, cipherText)
 	mode := cipher.NewCBCDecrypter(t.block, iv)
 	mode.CryptBlocks(result, result)
 
@@ -121,16 +134,43 @@ func (t *cbc) TransformFromStorage(data []byte, context value.Context) ([]byte, 
 	c := result[len(result)-1]
 	paddingSize := int(c)
 	size := len(result) - paddingSize
+	err := error(nil)
 	if paddingSize == 0 || paddingSize > len(result) {
-		return nil, false, errInvalidPKCS7Data
+		err = errFailedDecryption
 	}
 	for i := 0; i < paddingSize; i++ {
 		if result[size+i] != c {
-			return nil, false, errInvalidPKCS7Padding
+			err = errFailedDecryption
 		}
 	}
 
+	if t.hash != nil {
+		mac := data[macIndex:]
+		// ref Sum() in https://golang.org/pkg/hash/#Hash for why copy() is used
+		macInput := make([]byte, len(data[:macIndex]))
+		copy(macInput, data[:macIndex])
+		if authenticatedData := context.AuthenticatedData(); authenticatedData != nil {
+			macInput = append(macInput, authenticatedData...)
+		}
+		expectedMAC := t.getMAC(macInput)
+		if !hmac.Equal(mac, expectedMAC) {
+			err = errFailedDecryption
+		}
+	}
+
+	if err != nil {
+		return nil, false, err
+	}
 	return result[:size], false, nil
+}
+
+func (t *cbc) getMAC(data []byte) []byte {
+	t.hash.Write(data)
+	mac := t.hash.Sum(nil)
+	t.hash.Reset()
+	// ref https://golang.org/src/crypto/hmac/hmac.go for why Reset() is used
+	// mac of same message was giving a differnt output each time without this
+	return mac
 }
 
 func (t *cbc) TransformToStorage(data []byte, context value.Context) ([]byte, error) {
@@ -148,5 +188,15 @@ func (t *cbc) TransformToStorage(data []byte, context value.Context) ([]byte, er
 
 	mode := cipher.NewCBCEncrypter(t.block, iv)
 	mode.CryptBlocks(result[blockSize:], result[blockSize:])
+
+	// add MAC if hash function defined
+	if t.hash != nil {
+		macInput := result
+		if authenticatedData := context.AuthenticatedData(); authenticatedData != nil {
+			macInput = append(macInput, authenticatedData...)
+		}
+		mac := t.getMAC(macInput)
+		result = append(result, mac...)
+	}
 	return result, nil
 }
