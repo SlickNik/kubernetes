@@ -61,6 +61,14 @@ const (
             secret: c2VjcmV0IGlzIHNlY3VyZQ==
           - name: key2
             secret: dGhpcyBpcyBwYXNzd29yZA==
+      - aescbchmac:
+          keys:
+          - name: key1
+            encryptionsecret: c2VjcmV0IGlzIHNlY3VyZQ==
+            macsecret: c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK
+          - name: key2
+            encryptionsecret: dGhpcyBpcyBwYXNzd29yZA==
+            macsecret: dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK               
       - secretbox:
           keys:
           - name: key1
@@ -92,6 +100,14 @@ resources:
           secret: c2VjcmV0IGlzIHNlY3VyZQ==
         - name: key2
           secret: dGhpcyBpcyBwYXNzd29yZA==
+    - aescbchmac:
+        keys:
+        - name: key1
+          encryptionsecret: c2VjcmV0IGlzIHNlY3VyZQ==
+          macsecret: c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK
+        - name: key2
+          encryptionsecret: dGhpcyBpcyBwYXNzd29yZA==
+          macsecret: dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK      
     - secretbox:
         keys:
         - name: key1
@@ -125,6 +141,14 @@ resources:
           secret: c2VjcmV0IGlzIHNlY3VyZQ==
         - name: key2
           secret: dGhpcyBpcyBwYXNzd29yZA==
+    - aescbchmac:
+        keys:
+        - name: key1
+          encryptionsecret: c2VjcmV0IGlzIHNlY3VyZQ==
+          macsecret: c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK
+        - name: key2
+          encryptionsecret: dGhpcyBpcyBwYXNzd29yZA==
+          macsecret: dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK           
     - identity: {}
 `
 
@@ -141,6 +165,14 @@ resources:
           secret: c2VjcmV0IGlzIHNlY3VyZQ==
         - name: key2
           secret: dGhpcyBpcyBwYXNzd29yZA==
+    - aescbchmac:
+        keys:
+        - name: key1
+          encryptionsecret: c2VjcmV0IGlzIHNlY3VyZQ==
+          macsecret: c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK
+        - name: key2
+          encryptionsecret: dGhpcyBpcyBwYXNzd29yZA==
+          macsecret: dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK             
     - kms:
         name: testprovider
         endpoint: unix:///tmp/testprovider.sock
@@ -186,6 +218,14 @@ resources:
           secret: c2VjcmV0IGlzIHNlY3VyZQ==
         - name: key2
           secret: dGhpcyBpcyBwYXNzd29yZA==
+    - aescbchmac:
+        keys:
+        - name: key1
+          encryptionsecret: c2VjcmV0IGlzIHNlY3VyZQ==
+          macsecret: c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK
+        - name: key2
+          encryptionsecret: dGhpcyBpcyBwYXNzd29yZA==
+          macsecret: dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK            
 `
 
 	correctConfigWithKMSFirst = `
@@ -210,6 +250,52 @@ resources:
         - name: key2
           secret: dGhpcyBpcyBwYXNzd29yZA==
     - identity: {}
+    - aescbchmac:
+        keys:
+        - name: key1
+          encryptionsecret: c2VjcmV0IGlzIHNlY3VyZQ==
+          macsecret: c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK
+        - name: key2
+          encryptionsecret: dGhpcyBpcyBwYXNzd29yZA==
+          macsecret: dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK      
+    - aesgcm:
+        keys:
+        - name: key1
+          secret: c2VjcmV0IGlzIHNlY3VyZQ==
+        - name: key2
+          secret: dGhpcyBpcyBwYXNzd29yZA==
+`
+
+	correctConfigWithAesCbcHmacFirst = `
+kind: EncryptionConfiguration
+apiVersion: apiserver.config.k8s.io/v1
+resources:
+  - resources:
+    - secrets
+    providers:
+    - aescbchmac:
+        keys:
+        - name: key1
+          encryptionsecret: c2VjcmV0IGlzIHNlY3VyZQ==
+          macsecret: c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK
+        - name: key2
+          encryptionsecret: dGhpcyBpcyBwYXNzd29yZA==
+          macsecret: dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK  
+    - kms:
+        name: testprovider
+        endpoint: unix:///tmp/testprovider.sock
+        cachesize: 10
+    - secretbox:
+        keys:
+        - name: key1
+          secret: YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY=
+    - aescbc:
+        keys:
+        - name: key1
+          secret: c2VjcmV0IGlzIHNlY3VyZQ==
+        - name: key2
+          secret: dGhpcyBpcyBwYXNzd29yZA==
+    - identity: {} 
     - aesgcm:
         keys:
         - name: key1
@@ -307,6 +393,12 @@ func TestLegacyConfig(t *testing.T) {
 							{Name: "key2", Secret: "dGhpcyBpcyBwYXNzd29yZA=="},
 						},
 					}},
+					{AESCBCHMAC: &apiserverconfig.AESCBCHMACConfiguration{
+						Keys: []apiserverconfig.EncryptThenMACKey{
+							{Name: "key1", EncryptionSecret: "c2VjcmV0IGlzIHNlY3VyZQ==", MACSecret: "c2VjcmV0IGhhcyBpbnRlZ3JpdHkgd2l0aCBhIGhtYWMK"},
+							{Name: "key2", EncryptionSecret: "dGhpcyBpcyBwYXNzd29yZA==", MACSecret: "dGhpcyBpcyB0aGUgc2VjcmV0J3Mgc2lnbmluZyBrZXkK"},
+						},
+					}},
 					{Secretbox: &apiserverconfig.SecretboxConfiguration{
 						Keys: []apiserverconfig.Key{
 							{Name: "key1", Secret: "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY="},
@@ -346,6 +438,11 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithAesCbcFirst)
 	}
 
+	aesCbcHmacFirstTransformerOverrides, err := ParseEncryptionConfiguration(strings.NewReader(correctConfigWithAesCbcHmacFirst))
+	if err != nil {
+		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithAesCbcHmacFirst)
+	}
+
 	secretboxFirstTransformerOverrides, err := ParseEncryptionConfiguration(strings.NewReader(correctConfigWithSecretboxFirst))
 	if err != nil {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithSecretboxFirst)
@@ -360,6 +457,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	identityFirstTransformer := identityFirstTransformerOverrides[schema.ParseGroupResource("secrets")]
 	aesGcmFirstTransformer := aesGcmFirstTransformerOverrides[schema.ParseGroupResource("secrets")]
 	aesCbcFirstTransformer := aesCbcFirstTransformerOverrides[schema.ParseGroupResource("secrets")]
+	aesCbcHmacFirstTransformer := aesCbcHmacFirstTransformerOverrides[schema.ParseGroupResource("secrets")]
 	secretboxFirstTransformer := secretboxFirstTransformerOverrides[schema.ParseGroupResource("secrets")]
 	kmsFirstTransformer := kmsFirstTransformerOverrides[schema.ParseGroupResource("secrets")]
 
@@ -372,6 +470,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	}{
 		{aesGcmFirstTransformer, "aesGcmFirst"},
 		{aesCbcFirstTransformer, "aesCbcFirst"},
+		{aesCbcHmacFirstTransformer, "aesCbcHmacFirst"},
 		{secretboxFirstTransformer, "secretboxFirst"},
 		{identityFirstTransformer, "identityFirst"},
 		{kmsFirstTransformer, "kmsFirst"},
