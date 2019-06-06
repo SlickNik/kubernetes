@@ -42,6 +42,8 @@ type ProviderConfiguration struct {
 	AESGCM *AESConfiguration `json:"aesgcm,omitempty"`
 	// aescbc is the configuration for the AES-CBC transformer.
 	AESCBC *AESConfiguration `json:"aescbc,omitempty"`
+	// aescbchmac is the configuration for the AES-CBC transformer.
+	AESCBCHMAC *AESCBCHMACConfiguration `json:"aescbchmac,omitempty"`
 	// secretbox is the configuration for the Secretbox based transformer.
 	Secretbox *SecretboxConfiguration `json:"secretbox,omitempty"`
 	// identity is the (empty) configuration for the identity transformer.
@@ -57,6 +59,13 @@ type AESConfiguration struct {
 	Keys []Key `json:"keys"`
 }
 
+// AESCBCHMACConfiguration contains the API configuration for an AESCBCHMAC transformer.
+type AESCBCHMACConfiguration struct {
+	// keys is a list of keys to be used for creating the AES transformer.
+	// Each key has to be 32 bytes long for AES-CBC and 16, 24 or 32 bytes for AES-GCM.
+	Keys []EncryptThenMACKey `json:"keys"`
+}
+
 // SecretboxConfiguration contains the API configuration for an Secretbox transformer.
 type SecretboxConfiguration struct {
 	// keys is a list of keys to be used for creating the Secretbox transformer.
@@ -70,6 +79,16 @@ type Key struct {
 	Name string `json:"name"`
 	// secret is the actual key, encoded in base64.
 	Secret string `json:"secret"`
+}
+
+// EncryptThenMACKey contains name, encryption secret and signing secret of the provided key for a transformer.
+type EncryptThenMACKey struct {
+	// name is the name of the key to be used while storing data to disk.
+	Name string `json:"name"`
+	// encryption secret is the actual key, encoded in base64 used for encryption.
+	EncryptionSecret string `json:"encryptionsecret"`
+	// signing secret is the actual key, encoded in base64 used for generating the mac.
+	MACSecret string `json:"macsecret"`
 }
 
 // IdentityConfiguration is an empty struct to allow identity transformer in provider configuration.
