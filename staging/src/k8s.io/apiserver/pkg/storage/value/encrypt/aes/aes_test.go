@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -373,6 +375,11 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	hmacSHA256 := hmac.New(sha256.New, []byte("0123456789abcdef0123456789abcdef"))
+	if hmacSHA256 == nil {
+		t.Errorf("Unable to construct Hash for HMAC")
+	}
+
 	tests := []struct {
 		name    string
 		context value.Context
@@ -382,6 +389,9 @@ func TestRoundTrip(t *testing.T) {
 		{name: "GCM 24 byte key", t: NewGCMTransformer(aes24block)},
 		{name: "GCM 32 byte key", t: NewGCMTransformer(aes32block)},
 		{name: "CBC 32 byte key", t: NewCBCTransformer(aes32block)},
+		{name: "ACH CBC 16 byte key with 32 byte HMAC", t: NewACHTransformer(aes16block, hmacSHA256)},
+		{name: "ACH CBC 24 byte key with 32 byte HMAC", t: NewACHTransformer(aes24block, hmacSHA256)},
+		{name: "ACH CBC 32 byte key with 32 byte HMAC", t: NewACHTransformer(aes32block, hmacSHA256)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -422,5 +432,144 @@ func TestRoundTrip(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestACHDataStable(t *testing.T) {
+	block, err := aes.NewCipher([]byte("0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hash := hmac.New(sha256.New, []byte("0123456789abcdef0123456789abcdef"))
+	if hash == nil {
+		t.Errorf("Unable to construct Hash for HMAC")
+	}
+
+	aead, err := NewACH(block, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// IMPORTANT: If you must fix this test, then all previously encrypted data from previously compiled versions is broken unless you hardcode the nonce size to 12
+	if aead.NonceSize() != 12 {
+		t.Fatalf("The underlying Golang crypto size has changed, old version of AES on disk will not be readable unless the AES implementation is changed to hardcode nonce size.")
+	}
+}
+
+func TestACHKeyRotation(t *testing.T) {
+	testErr := fmt.Errorf("test error")
+	block1, err := aes.NewCipher([]byte("abcdefghijklmnop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block2, err := aes.NewCipher([]byte("0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash1 := hmac.New(sha256.New, []byte("0123456789abcdef0123456789abcdef"))
+	if hash1 == nil {
+		t.Errorf("Unable to construct Hash for HMAC")
+	}
+	hash2 := hmac.New(sha256.New, []byte("abcdef0123456789abcdef0123456789"))
+	if hash2 == nil {
+		t.Errorf("Unable to construct Hash for HMAC")
+	}
+
+	context := value.DefaultContext([]byte("authenticated_data"))
+
+	p := value.NewPrefixTransformers(testErr,
+		value.PrefixTransformer{Prefix: []byte("first:"), Transformer: NewACHTransformer(block1, hash1)},
+		value.PrefixTransformer{Prefix: []byte("second:"), Transformer: NewACHTransformer(block2, hash2)},
+	)
+	out, err := p.TransformToStorage([]byte("firstvalue"), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(out, []byte("first:")) {
+		t.Fatalf("unexpected prefix: %q", out)
+	}
+	from, stale, err := p.TransformFromStorage(out, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale || !bytes.Equal([]byte("firstvalue"), from) {
+		t.Fatalf("unexpected data: %t %q", stale, from)
+	}
+
+	// verify changing the context (authenticated data) fails to decrypt
+	from, stale, err = p.TransformFromStorage(out, value.DefaultContext([]byte("incorrect_context")))
+	if err == nil {
+		t.Fatalf("expected unauthenticated data")
+	}
+
+	// reverse the order, use the second key
+	p = value.NewPrefixTransformers(testErr,
+		value.PrefixTransformer{Prefix: []byte("second:"), Transformer: NewACHTransformer(block2, hash2)},
+		value.PrefixTransformer{Prefix: []byte("first:"), Transformer: NewACHTransformer(block1, hash1)},
+	)
+	from, stale, err = p.TransformFromStorage(out, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stale || !bytes.Equal([]byte("firstvalue"), from) {
+		t.Fatalf("unexpected data: %t %q", stale, from)
+	}
+}
+
+func TestACHCiphertextIntegrity(t *testing.T) {
+	testErr := fmt.Errorf("test error")
+	block, err := aes.NewCipher([]byte("abcdefghijklmnop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := hmac.New(sha256.New, []byte("0123456789abcdef0123456789abcdef"))
+	if hash == nil {
+		t.Errorf("Unable to construct Hash for HMAC")
+	}
+
+	context := value.DefaultContext([]byte("authenticated_data"))
+
+	p := value.NewPrefixTransformers(testErr,
+		value.PrefixTransformer{Prefix: []byte("first:"), Transformer: NewACHTransformer(block, hash)},
+	)
+
+	out, err := p.TransformToStorage([]byte("firstvalue"), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.HasPrefix(out, []byte("first:")) {
+		t.Fatalf("unexpected prefix: %q", out)
+	}
+
+	from, stale, err := p.TransformFromStorage(out, context)
+	if err != nil {
+		t.Fatal(err, len(out))
+	}
+	if stale || !bytes.Equal([]byte("firstvalue"), from) {
+		t.Fatalf("unexpected data: %t %q", stale, from)
+	}
+
+	// verify changing the context fails decrypt
+	from, stale, err = p.TransformFromStorage(out, value.DefaultContext([]byte("incorrect_context")))
+	if err == nil {
+		t.Fatalf("expected unauthenticated data: %v", err)
+	}
+
+	// verify invalid tag fails decrypt
+	ciphertext := make([]byte, len(out))
+	copy(ciphertext, out)
+	ciphertext = append(ciphertext[:len(ciphertext)-16], []byte("aninvalidtaghere")...)
+	from, stale, err = p.TransformFromStorage(ciphertext, context)
+	if err == nil {
+		t.Fatalf("expected invalid mac for data: %v", err)
+	}
+
+	// verify messing with the ciphertext fails decrypt
+	copy(ciphertext, out)
+	ciphertext[aes.BlockSize] = byte('x')
+	from, stale, err = p.TransformFromStorage(ciphertext, context)
+	if err == nil {
+		t.Fatalf("expected changed ciphertext to result in error: %v", err)
 	}
 }

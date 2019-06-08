@@ -19,6 +19,8 @@ package encryptionconfig
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -39,11 +41,12 @@ import (
 )
 
 const (
-	aesCBCTransformerPrefixV1    = "k8s:enc:aescbc:v1:"
-	aesGCMTransformerPrefixV1    = "k8s:enc:aesgcm:v1:"
-	secretboxTransformerPrefixV1 = "k8s:enc:secretbox:v1:"
-	kmsTransformerPrefixV1       = "k8s:enc:kms:v1:"
-	kmsPluginConnectionTimeout   = 3 * time.Second
+	aesCBCTransformerPrefixV1     = "k8s:enc:aescbc:v1:"
+	aesCBCHMACTransformerPrefixV1 = "k8s:enc:aescbchmac:v1:"
+	aesGCMTransformerPrefixV1     = "k8s:enc:aesgcm:v1:"
+	secretboxTransformerPrefixV1  = "k8s:enc:secretbox:v1:"
+	kmsTransformerPrefixV1        = "k8s:enc:kms:v1:"
+	kmsPluginConnectionTimeout    = 3 * time.Second
 )
 
 // GetTransformerOverrides returns the transformer overrides by reading and parsing the encryption provider configuration file
@@ -144,6 +147,14 @@ func GetPrefixTransformers(config *apiserverconfig.ResourceConfiguration) ([]val
 			found = true
 		}
 
+		if provider.AESCBCHMAC != nil {
+			if found == true {
+				return result, fmt.Errorf("more than one provider specified in a single element, should split into different list elements")
+			}
+			transformer, err = GetAESCBCHMACPrefixTransformer(provider.AESCBCHMAC, aesCBCHMACTransformerPrefixV1)
+			found = true
+		}
+
 		if provider.Secretbox != nil {
 			if found == true {
 				return result, fmt.Errorf("more than one provider specified in a single element, should split into different list elements")
@@ -239,6 +250,68 @@ func GetAESPrefixTransformer(config *apiserverconfig.AESConfiguration, fn BlockT
 		keyTransformers = append(keyTransformers,
 			value.PrefixTransformer{
 				Transformer: fn(block),
+				Prefix:      []byte(keyData.Name + ":"),
+			})
+	}
+
+	// Create a prefixTransformer which can choose between these keys
+	keyTransformer := value.NewPrefixTransformers(
+		fmt.Errorf("no matching key was found for the provided AES transformer"), keyTransformers...)
+
+	// Create a PrefixTransformer which shall later be put in a list with other providers
+	result = value.PrefixTransformer{
+		Transformer: keyTransformer,
+		Prefix:      []byte(prefix),
+	}
+	return result, nil
+}
+
+// GetAESCBCHMACPrefixTransformer returns a prefix transformer from the provided configuration.
+// Returns an AESCBCHMAC transformer based on the provided prefix and block transformer.
+func GetAESCBCHMACPrefixTransformer(config *apiserverconfig.AESCBCHMACConfiguration, prefix string) (value.PrefixTransformer, error) {
+	var result value.PrefixTransformer
+
+	if len(config.Keys) == 0 {
+		return result, fmt.Errorf("aes provider has no valid keys")
+	}
+	for _, key := range config.Keys {
+		if key.Name == "" {
+			return result, fmt.Errorf("key with invalid name provided")
+		}
+		if key.EncryptionSecret == "" {
+			return result, fmt.Errorf("key %v has no provided encryption secret", key.Name)
+		}
+		if key.MACSecret == "" {
+			return result, fmt.Errorf("key %v has no provided mac secret", key.Name)
+		}
+	}
+
+	keyTransformers := []value.PrefixTransformer{}
+
+	for _, keyData := range config.Keys {
+		encryptionkey, err := base64.StdEncoding.DecodeString(keyData.EncryptionSecret)
+		if err != nil {
+			return result, fmt.Errorf("could not obtain encryption secret for named key %s: %s", keyData.Name, err)
+		}
+		block, err := aes.NewCipher(encryptionkey)
+		if err != nil {
+			return result, fmt.Errorf("error while creating cipher for named key %s: %s", keyData.Name, err)
+		}
+
+		mackey, err := base64.StdEncoding.DecodeString(keyData.MACSecret)
+		if err != nil {
+			return result, fmt.Errorf("could not obtain mac secret for named key %s: %s", keyData.Name, err)
+		}
+		if len(mackey) < 32 {
+			return result, fmt.Errorf("expected mac key size >= 32 for aescbchmac key %s, got %v", keyData.Name, len(mackey))
+		}
+		// Not sure if we should restrict this - hmac.New allows lesser than 32 bytes
+		hash := hmac.New(sha256.New, mackey)
+
+		// Create a new PrefixTransformer for this key
+		keyTransformers = append(keyTransformers,
+			value.PrefixTransformer{
+				Transformer: aestransformer.NewACHTransformer(block, hash),
 				Prefix:      []byte(keyData.Name + ":"),
 			})
 	}

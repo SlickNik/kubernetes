@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 
 	"k8s.io/apiserver/pkg/storage/value"
@@ -149,4 +150,48 @@ func (t *cbc) TransformToStorage(data []byte, context value.Context) ([]byte, er
 	mode := cipher.NewCBCEncrypter(t.block, iv)
 	mode.CryptBlocks(result[blockSize:], result[blockSize:])
 	return result, nil
+}
+
+// ach implements AEAD encryption of the provided values given a cipher.Block algorithm.
+// TODO docs
+type ach struct {
+	block cipher.Block
+	hash  hash.Hash
+}
+
+// NewACHTransformer takes the given block cipher and performs encryption and decryption on the given
+// data.
+func NewACHTransformer(block cipher.Block, hash hash.Hash) value.Transformer {
+	return &ach{block: block, hash: hash}
+}
+
+func (t *ach) TransformFromStorage(data []byte, context value.Context) ([]byte, bool, error) {
+	aead, err := NewACH(t.block, t.hash)
+	if err != nil {
+		return nil, false, err
+	}
+	nonceSize := aead.NonceSize()
+	if len(data) < nonceSize {
+		return nil, false, fmt.Errorf("the stored data was shorter than the required size")
+	}
+	result, err := aead.Open(nil, data[:nonceSize], data[nonceSize:], context.AuthenticatedData())
+	return result, false, err
+}
+
+func (t *ach) TransformToStorage(data []byte, context value.Context) ([]byte, error) {
+	aead, err := NewACH(t.block, t.hash)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := aead.NonceSize()
+	result := make([]byte, nonceSize+aead.Overhead()+len(data))
+	n, err := rand.Read(result[:nonceSize])
+	if err != nil {
+		return nil, err
+	}
+	if n != nonceSize {
+		return nil, fmt.Errorf("unable to read sufficient random bytes")
+	}
+	cipherText := aead.Seal(result[nonceSize:nonceSize], result[:nonceSize], data, context.AuthenticatedData())
+	return append(result[:nonceSize], cipherText...), nil
 }
